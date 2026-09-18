@@ -22,10 +22,10 @@ jobs:
       - name: Checkout Public Page Repo
         uses: actions/checkout@v4
         with:
-          # REPLACE 'your-github-username' with your GitHub org/user name
           repository: 'olga-dreamapply/whats-new-page'
           token: ${{ secrets.PUBLIC_DOCS_PAT }}
           ref: 'main'
+          fetch-depth: 0
 
       # Step 2: Fetch issues requiring both labels AND non-empty Resolution Details
       - name: Fetch and Process Qualified Issues
@@ -61,9 +61,10 @@ jobs:
             )
           ' > data.json
 
-      # Step 3: Commit and push the updated data.json to the public repository
+      # Step 3: Pull latest changes and commit data.json to the public repo
       - name: Commit and Push Updated Data
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "sync: update whats-new data ledger"
           branch: main
+          file_pattern: 'data.json'
