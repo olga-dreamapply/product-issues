@@ -63,10 +63,16 @@ jobs:
             )
           ' > data.json
 
-      # Step to sync remote changes before pushing
-      - name: Pull Latest Changes
+      - name: Safely Pull Remote Changes
         run: |
+          # Configure temp git identity for stashing
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Stash generated data.json, rebase remote changes, then re-apply data.json
+          git stash --include-untracked
           git pull --rebase origin main
+          git stash pop || true
 
       - name: Commit and Push Updated Data
         uses: stefanzweifel/git-auto-commit-action@v5
