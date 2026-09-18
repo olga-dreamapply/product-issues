@@ -16,7 +16,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           # REPLACE 'your-github-username' with your actual username or organization name
-          repository: 'your-github-username/whats-new-page'
+          repository: 'olga-dreamapply/whats-new-page'
           token: ${{ secrets.PUBLIC_DOCS_PAT }}
           ref: 'main'
 
