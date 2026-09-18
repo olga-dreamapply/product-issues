@@ -28,7 +28,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
-          # Fetch closed issues along with all comment bodies
           raw_issues=$(gh issue list --repo "$REPO" --state closed --limit 1000 --json number,title,labels,closedAt,body,comments)
 
           echo "$raw_issues" | jq '
@@ -36,10 +35,8 @@ jobs:
               . as $item |
               ($item.labels | map(.name)) as $labels |
 
-              # 1. Gather issue body and all comment bodies into a single array of strings
               ([$item.body // ""] + (($item.comments // []) | map(.body // ""))) as $allTexts |
 
-              # 2. Find the first text entry containing "Resolution Details" and extract everything below it
               (
                 $allTexts | map(
                   select(test("#+\\s*Resolution Details"; "i")) |
@@ -49,7 +46,10 @@ jobs:
                 ) | first // ""
               ) as $resText |
 
-              # 3. Filter: Issue must have BOTH "in production" AND "what'\''s new" labels
+              (
+                [$item.labels[].name | select(startswith("Category:")) | split(":")[1] | gsub("^\\s+|\\s+$"; "")]
+              ) as $cats |
+
               select(
                 ($labels | index("in production")) != null and
                 ($labels | index("what'\''s new")) != null
@@ -57,13 +57,16 @@ jobs:
                 id: .number,
                 title: (.title | gsub("\\[[^\\]]*\\]"; "") | gsub("^\\s+|\\s+$"; "")),
                 closedAt: .closedAt,
-                category: (
-                  [$item.labels[].name | select(startswith("Category:")) | split(":")[1] | gsub("^\\s+|\\s+$"; "")] | first // "General"
-                ),
+                categories: (if ($cats | length) > 0 then $cats else ["General"] end),
                 resolutionText: $resText
               }
             )
           ' > data.json
+
+      # Step to sync remote changes before pushing
+      - name: Pull Latest Changes
+        run: |
+          git pull --rebase origin main
 
       - name: Commit and Push Updated Data
         uses: stefanzweifel/git-auto-commit-action@v5
