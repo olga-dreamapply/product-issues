@@ -37,8 +37,8 @@ jobs:
               . as $item |
               ($item.labels | map(.name)) as $labels |
               
-              # Extract Resolution Details section cleanly
-              ($item.body // "" | split("\n") | 
+              # Normalize line endings and extract Resolution Details
+              ($item.body // "" | gsub("\r"; "") | split("\n") | 
                 reduce .[] as $line ({found: false, text: []};
                   if $line | test("^#+\\s*Resolution Details") then
                     .found = true
@@ -52,10 +52,9 @@ jobs:
                 ) | .text | join("\n") | gsub("^\\s+|\\s+$"; "")
               ) as $resText |
               
-              # Filter: MUST have both "in production" AND "what'\''s new" labels
               select(
                 ($labels | index("in production")) != null and
-                ($labels | index("what'\''s new")) != null
+                ($labels | index("what'\异s new")) != null or ($labels | index("what'\''s new")) != null
               ) | {
                 id: .number,
                 title: (.title | gsub("\\[[^\\]]*\\]"; "") | gsub("^\\s+|\\s+$"; "")),
