@@ -8,7 +8,6 @@ jobs:
   sync-whats-new:
     runs-on: ubuntu-latest
 
-    # Triggers if 'what's new' label is currently on the issue OR if it was just removed
     if: >-
       contains(github.event.issue.labels.*.name, 'what''s new') ||
       (github.event.action == 'unlabeled' && github.event.label.name == 'what''s new')
@@ -18,7 +17,6 @@ jobs:
       issues: read
 
     steps:
-      # Step 1: Checkout the public repository
       - name: Checkout Public Page Repo
         uses: actions/checkout@v4
         with:
@@ -27,23 +25,18 @@ jobs:
           ref: 'main'
           fetch-depth: 0
 
-      # Step 2: Fetch issues requiring both labels AND non-empty Resolution Details
       - name: Fetch and Process Qualified Issues
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
-          # Fetch up to 1000 closed issues from the private repository
           raw_issues=$(gh issue list --repo "$REPO" --state closed --limit 1000 --json number,title,labels,closedAt,body)
 
-          # Filter criteria:
-          # 1. Contains 'in production' AND 'what's new' labels
-          # 2. Contains '### Resolution Details' section with non-empty content
           echo "$raw_issues" | jq '
             map(
               . as $item |
               ($item.labels | map(.name)) as $labels |
-              ($item.body // "" | if test("### Resolution Details") then (sub("(?s).*### Resolution Details\\s*"; "") | sub("(?s)\\s*###.*"; "") | gsub("^\\s+|\\s+$"; "")) else "" end) as $resText |
+              ($item.body // "" | if test("#+\\s*Resolution Details") then (sub("(?s).*#+\\s*Resolution Details\\s*"; "") | sub("(?s)\\s*#+.*"; "") | gsub("^\\s+|\\s+$"; "")) else "" end) as $resText |
               
               select(
                 ($labels | index("in production")) != null and
@@ -61,7 +54,6 @@ jobs:
             )
           ' > data.json
 
-      # Step 3: Pull latest changes and commit data.json to the public repo
       - name: Commit and Push Updated Data
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
