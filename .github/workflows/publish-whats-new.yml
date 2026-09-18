@@ -28,7 +28,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
-          # Fetch closed issues including comments
+          # Fetch closed issues along with all comment bodies
           raw_issues=$(gh issue list --repo "$REPO" --state closed --limit 1000 --json number,title,labels,closedAt,body,comments)
 
           echo "$raw_issues" | jq '
@@ -36,28 +36,20 @@ jobs:
               . as $item |
               ($item.labels | map(.name)) as $labels |
 
-              # Safely extract comment bodies array
-              (($item.comments // []) | map(.body // "")) as $commentBodies |
+              # 1. Gather issue body and all comment bodies into a single array of strings
+              ([$item.body // ""] + (($item.comments // []) | map(.body // ""))) as $allTexts |
 
-              # 1. Combine issue body and all comments into a single string
-              ([$item.body // ""] + $commentBodies) | join("\n\n---\n\n") as $fullContent |
-
-              # 2. Extract content under Resolution Details header
-              ($fullContent | gsub("\r"; "") | split("\n") | 
-                reduce .[] as $line ({found: false, text: []};
-                  if $line | test("^#+\\s*Resolution Details"; "i") then
-                    .found = true
-                  elif .found and ($line | test("^#+\\s+")) then
-                    .found = false
-                  elif .found then
-                    .text += [$line]
-                  else
-                    .
-                  end
-                ) | .text | join("\n") | gsub("^\\s+|\\s+$"; "")
+              # 2. Find the first text entry containing "Resolution Details" and extract everything below it
+              (
+                $allTexts | map(
+                  select(test("#+\\s*Resolution Details"; "i")) |
+                  sub("(?s).*?#+\\s*Resolution Details\\s*"; "") |
+                  sub("(?s)\\s*#+.*"; "") |
+                  gsub("^\\s+|\\s+$"; "")
+                ) | first // ""
               ) as $resText |
 
-              # Filter: Must contain both required labels
+              # 3. Filter: Issue must have BOTH "in production" AND "what'\''s new" labels
               select(
                 ($labels | index("in production")) != null and
                 ($labels | index("what'\''s new")) != null
