@@ -7,26 +7,33 @@ on:
 jobs:
   sync-whats-new:
     runs-on: ubuntu-latest
+
+    # Explicit permissions required to access private repository issues via GraphQL/GH CLI
     permissions:
-      issues: read        # Enables access to read private repository issues
       contents: read
+      issues: read
+
     steps:
+      # Step 1: Checkout the public repository where index.html and data.json live
       - name: Checkout Public Page Repo
         uses: actions/checkout@v4
         with:
-          repository: 'olga-dreamapply/whats-new-page'
+          # REPLACE 'your-github-username' with your GitHub org/user name
+          repository: 'your-github-username/whats-new-page'
           token: ${{ secrets.PUBLIC_DOCS_PAT }}
           ref: 'main'
 
+      # Step 2: Fetch qualified issues and process them into structured JSON
       - name: Fetch and Process Qualified Issues
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
-          # Fetch closed issues labeled with both 'in production' and 'what's new'
-          raw_issues=$(gh issue list --repo "$REPO" --state closed --json number,title,labels,closedAt,body)
+          # Query up to 1000 closed issues from the private repository
+          raw_issues=$(gh issue list --repo "$REPO" --state closed --limit 1000 --json number,title,labels,closedAt,body)
 
-          # Parse, filter, and structure the data into JSON using jq
+          # Filter for issues with BOTH 'in production' AND 'what's new' labels
+          # Extract title, date, Category: <Name> label, and ### Resolution Details section
           echo "$raw_issues" | jq '
             map(select(
               (.labels | map(.name) | contains(["in production"])) and
@@ -40,12 +47,18 @@ jobs:
               ),
               resolutionText: (
                 if .body then
-                  (.body | capture("### Resolution Details\\s*(?<text>[\\s\\S]*?)(###|$)") | .text | gsub("^\\s+|\\s+$"; ""))
+                  (
+                    .body 
+                    | capture("### Resolution Details\\s*(?<text>[\\s\\S]*?)(###|$)") 
+                    | .text 
+                    | gsub("^\\s+|\\s+$"; "")
+                  )
                 else "" end
-              )
+              ) | if . == null or . == "" then "" else . end
             })
           ' > data.json
 
+      # Step 3: Commit and push the updated data.json to the public repository
       - name: Commit and Push Updated Data
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
