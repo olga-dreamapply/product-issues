@@ -54,7 +54,7 @@ jobs:
               
               select(
                 ($labels | index("in production")) != null and
-                ($labels | index("what'\异s new")) != null or ($labels | index("what'\''s new")) != null
+                ($labels | index("what'\''s new")) != null
               ) | {
                 id: .number,
                 title: (.title | gsub("\\[[^\\]]*\\]"; "") | gsub("^\\s+|\\s+$"; "")),
