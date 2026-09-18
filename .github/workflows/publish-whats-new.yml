@@ -1,0 +1,52 @@
+name: Publish to What's New Page
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  publish-item:
+    # Triggers only when the issue is given the 'in production' label
+    if: github.event.label.name == 'in production'
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Checkout the public HTML target repository
+      - name: Checkout Public Docs Repo
+        uses: actions/checkout@v4
+        with:
+          # REPLACE 'your-github-username' with your actual username or organization name
+          repository: 'your-github-username/whats-new-page'
+          token: ${{ secrets.PUBLIC_DOCS_PAT }}
+          ref: 'main'
+
+      # Step 2: Inject HTML Tile into index.html
+      - name: Insert New Tile into HTML
+        env:
+          RAW_TITLE: ${{ github.event.issue.title }}
+          ISSUE_LABELS: ${{ toJson(github.event.issue.labels.*.name) }}
+        run: |
+          # 1. Sanitize issue title (strips internal tags like [BUG-123])
+          CLEAN_TITLE=$(echo "$RAW_TITLE" | sed -E 's/\[[^]]*\]//g' | xargs)
+
+          # 2. Find category label (ignores 'in production')
+          CATEGORY=$(echo "$ISSUE_LABELS" | jq -r '.[] | select(. != "in production")' | head -n 1)
+          if [ -z "$CATEGORY" ]; then
+            CATEGORY="Update"
+          fi
+
+          RESOLVED_DATE=$(date -u +"%Y-%m-%d")
+
+          # 3. Formulate HTML Tile String
+          TILE="<div class=\"tile\"><div class=\"tile-header\"><span class=\"badge\">${CATEGORY}</span><span class=\"date\">${RESOLVED_DATE}</span></div><h3 class=\"tile-title\">${CLEAN_TITLE}</h3></div>"
+
+          # 4. Insert tile right below <!-- ITEMS_START --> line in index.html
+          sed -i "/<!-- ITEMS_START -->/a \      ${TILE}" index.html
+
+      # Step 3: Commit changes back to the public repository
+      - name: Commit and Push Update
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "auto: publish new release entry"
+          # REPLACE with your default branch if it is 'master' instead of 'main'
+          branch: main
