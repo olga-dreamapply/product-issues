@@ -7,6 +7,9 @@ on:
 jobs:
   sync-whats-new:
     runs-on: ubuntu-latest
+    permissions:
+      issues: read        # Enables access to read private repository issues
+      contents: read
     steps:
       - name: Checkout Public Page Repo
         uses: actions/checkout@v4
