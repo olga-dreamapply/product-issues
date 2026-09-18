@@ -3,14 +3,12 @@ name: Sync What's New Feed
 on:
   issues:
     types: [edited, closed, reopened, labeled, unlabeled]
+  issue_comment:
+    types: [created, edited, deleted]
 
 jobs:
   sync-whats-new:
     runs-on: ubuntu-latest
-
-    if: >-
-      contains(github.event.issue.labels.*.name, 'what''s new') ||
-      (github.event.action == 'unlabeled' && github.event.label.name == 'what''s new')
 
     permissions:
       contents: read
@@ -30,17 +28,21 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
-          raw_issues=$(gh issue list --repo "$REPO" --state closed --limit 1000 --json number,title,labels,closedAt,body)
+          # Fetch closed issues including comments
+          raw_issues=$(gh issue list --repo "$REPO" --state closed --limit 1000 --json number,title,labels,closedAt,body,comments)
 
           echo "$raw_issues" | jq '
             map(
               . as $item |
               ($item.labels | map(.name)) as $labels |
-              
-              # Normalize line endings and extract Resolution Details
-              ($item.body // "" | gsub("\r"; "") | split("\n") | 
+
+              # 1. Combine issue body and all comment bodies into a single searchable text block
+              ([$item.body // ""] + ([$item.comments[].body // ""])) | join("\n\n---\n\n") as $fullContent |
+
+              # 2. Extract content under Resolution Details header regardless of line endings (\r\n)
+              ($fullContent | gsub("\r"; "") | split("\n") | 
                 reduce .[] as $line ({found: false, text: []};
-                  if $line | test("^#+\\s*Resolution Details") then
+                  if $line | test("^#+\\s*Resolution Details"; "i") then
                     .found = true
                   elif .found and ($line | test("^#+\\s+")) then
                     .found = false
@@ -51,7 +53,8 @@ jobs:
                   end
                 ) | .text | join("\n") | gsub("^\\s+|\\s+$"; "")
               ) as $resText |
-              
+
+              # Filter: Must contain both required labels
               select(
                 ($labels | index("in production")) != null and
                 ($labels | index("what'\''s new")) != null
