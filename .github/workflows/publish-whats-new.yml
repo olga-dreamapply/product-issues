@@ -36,10 +36,13 @@ jobs:
               . as $item |
               ($item.labels | map(.name)) as $labels |
 
-              # 1. Combine issue body and all comment bodies into a single searchable text block
-              ([$item.body // ""] + ([$item.comments[].body // ""])) | join("\n\n---\n\n") as $fullContent |
+              # Safely extract comment bodies array
+              (($item.comments // []) | map(.body // "")) as $commentBodies |
 
-              # 2. Extract content under Resolution Details header regardless of line endings (\r\n)
+              # 1. Combine issue body and all comments into a single string
+              ([$item.body // ""] + $commentBodies) | join("\n\n---\n\n") as $fullContent |
+
+              # 2. Extract content under Resolution Details header
               ($fullContent | gsub("\r"; "") | split("\n") | 
                 reduce .[] as $line ({found: false, text: []};
                   if $line | test("^#+\\s*Resolution Details"; "i") then
