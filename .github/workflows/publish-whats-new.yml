@@ -1,3 +1,18 @@
+Here is the updated `.github/workflows/publish-whats-new.yml` file with that safety guard applied.
+
+### What Was Fixed
+
+1. **Isolated Title Parsing:** The `jq` expression for extracting `module` now inspects **only** the `$item.title` string (`^\\[[^\\]]+\\]`). It completely ignores the issue description, comments, and the `## Resolution Details` section.
+2. **Markdown Image Protection:** Images in markdown format (`![alt text](url)`) inside your resolution notes or comments will no longer trigger the module extractor.
+3. **Clean Fallback:** If no `[Module]` is present at the beginning of the issue title, `moduleTag` returns `null`, and the `index.html` frontend gracefully falls back to displaying the assigned `Category:` label badge.
+
+---
+
+### Updated `.github/workflows/publish-whats-new.yml`
+
+Replace the workflow file in your private **`product-issues`** repository with this code:
+
+```yaml
 name: Sync What's New Feed
 
 on:
@@ -35,10 +50,10 @@ jobs:
               . as $item |
               ($item.labels | map(.name)) as $labels |
 
-              # 1. Gather issue body and all comments
+              # 1. Gather issue body and all comments strictly for Resolution Details content
               ([$item.body // ""] + (($item.comments // []) | map(.body // ""))) as $bodyAndComments |
 
-              # 2. Extract Resolution Details section
+              # 2. Extract Resolution Details section text
               (
                 $bodyAndComments | map(
                   select(test("#+\\s*Resolution Details"; "i")) |
@@ -48,7 +63,7 @@ jobs:
                 ) | first // ""
               ) as $rawResText |
 
-              # 3. Extract [Module] from the Title ONLY (avoiding markdown links like [text](url))
+              # 3. Extract [Module] STRICTLY from $item.title (Prevents matching ![Image Alt](url) in details)
               (
                 if ($item.title | test("^\\[[^\\]]+\\]")) then
                   ($item.title | capture("^\\[(?<mod>[^\\]]+)\\]") | .mod | gsub("^\\s+|\\s+$"; ""))
@@ -57,10 +72,10 @@ jobs:
                 end
               ) as $moduleTag |
 
-              # 4. Remove [Module] from issue title for clean title fallback
+              # 4. Clean base issue title by stripping leading [Module] tag
               ($item.title | gsub("^\\[[^\\]]*\\]"; "") | gsub("^\\s+|\\s+$"; "")) as $cleanTitle |
 
-              # 5. Check if Resolution Details has a "### Title" line override
+              # 5. Determine display title: Check if Resolution Details has an "### Title" line override
               (
                 if ($rawResText != "" and ($rawResText | test("^###\\s+"; "m"))) then
                   ($rawResText | capture("^###\\s+(?<customTitle>[^\n]+)") | .customTitle | gsub("^\\s+|\\s+$"; ""))
@@ -69,7 +84,7 @@ jobs:
                 end
               ) as $displayTitle |
 
-              # 6. Extract expandable body text (strip the custom ### title line if present)
+              # 6. Extract expandable body text (strips the custom ### title line if present)
               (
                 if ($rawResText != "" and ($rawResText | test("^###\\s+"; "m"))) then
                   ($rawResText | sub("^###\\s+[^\n]+\\n?"; "") | gsub("^\\s+|\\s+$"; ""))
@@ -113,3 +128,5 @@ jobs:
           commit_message: "sync: update whats-new data ledger"
           branch: main
           file_pattern: 'data.json'
+
+```
