@@ -35,8 +35,10 @@ jobs:
               . as $item |
               ($item.labels | map(.name)) as $labels |
 
+              # 1. Combine issue body and all comments
               ([$item.body // ""] + (($item.comments // []) | map(.body // ""))) as $allTexts |
 
+              # 2. Extract Resolution Details section
               (
                 $allTexts | map(
                   select(test("#+\\s*Resolution Details"; "i")) |
@@ -44,32 +46,57 @@ jobs:
                   sub("(?s)\\s*#+.*"; "") |
                   gsub("^\\s+|\\s+$"; "")
                 ) | first // ""
-              ) as $resText |
+              ) as $rawResText |
 
+              # 3. Extract module prefix from bracket e.g. "[Applicant Portal]"
+              ($item.title | capture("\\[(?<mod>[^\\]]+)\\]") | .mod) // null as $moduleTag |
+
+              # 4. Clean issue title by removing the [Module] prefix
+              ($item.title | gsub("\\[[^\\]]*\\]"; "") | gsub("^\\s+|\\s+$"; "")) as $cleanTitle |
+
+              # 5. Check if Resolution Details contains a custom H3 title override (### Some Title)
+              (
+                if $rawResText | test("^###\\s+"; "m") then
+                  ($rawResText | capture("^###\\s+(?<customTitle>[^\n]+)") | .customTitle | gsub("^\\s+|\\s+$"; ""))
+                else
+                  $cleanTitle
+                end
+              ) as $displayTitle |
+
+              # 6. Extract the resolution details body (everything after custom H3 title if present)
+              (
+                if $rawResText | test("^###\\s+"; "m") then
+                  ($rawResText | sub("^###\\s+[^\n]+\\n?"; "") | gsub("^\\s+|\\s+$"; ""))
+                else
+                  $rawResText
+                end
+              ) as $resBody |
+
+              # 7. Extract Category labels (Category: Feature, Category: Enhancement, Category: Bug fix, Category: UX/UI)
               (
                 [$item.labels[].name | select(startswith("Category:")) | split(":")[1] | gsub("^\\s+|\\s+$"; "")]
               ) as $cats |
 
+              # 8. Filter: Must contain both "in production" AND "what'\''s new"
               select(
                 ($labels | index("in production")) != null and
                 ($labels | index("what'\''s new")) != null
               ) | {
                 id: .number,
-                title: (.title | gsub("\\[[^\\]]*\\]"; "") | gsub("^\\s+|\\s+$"; "")),
+                title: $displayTitle,
+                module: $moduleTag,
                 closedAt: .closedAt,
                 categories: (if ($cats | length) > 0 then $cats else ["General"] end),
-                resolutionText: $resText
+                resolutionText: $resBody
               }
             )
           ' > data.json
 
       - name: Safely Pull Remote Changes
         run: |
-          # Configure temp git identity for stashing
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # Stash generated data.json, rebase remote changes, then re-apply data.json
           git stash --include-untracked
           git pull --rebase origin main
           git stash pop || true
