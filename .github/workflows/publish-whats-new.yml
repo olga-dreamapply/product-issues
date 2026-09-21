@@ -35,15 +35,17 @@ jobs:
               . as $item |
               ($item.labels | map(.name)) as $labels |
 
-              # 1. Combine issue body and all comments into an array of texts
+              # 1. Combine issue body and all comments into an array
               ([$item.body // ""] + (($item.comments // []) | map(.body // ""))) as $bodyAndComments |
 
-              # 2. Extract content under Resolution Details (case-insensitive & any heading level #)
+              # 2. Extract content under Resolution Details (case-insensitive)
               (
                 $bodyAndComments | map(
                   select(test("(?i)#+\\s*Resolution Details")) |
-                  sub("(?s).*?(?i)#+\\s*Resolution Details\\s*"; "") |
-                  sub("(?s)\\s*#+.*"; "") |
+                  # Strip everything before Resolution Details header
+                  sub("(?s).*?(?i)#+\\s*Resolution Details\\s*\n?"; "") |
+                  # Strip trailing sibling headers if another top-level section starts
+                  sub("(?s)\n#+ [^#].*"; "") |
                   gsub("^\\s+|\\s+$"; "")
                 ) | first // ""
               ) as $rawResText |
@@ -60,7 +62,7 @@ jobs:
               # 4. Clean base issue title by removing leading [Module] tag
               ($item.title | gsub("^\\[[^\\]]*\\]"; "") | gsub("^\\s+|\\s+$"; "")) as $cleanTitle |
 
-              # 5. Check if Resolution Details has ANY nested heading (#, ##, ###, etc.) for Title Override
+              # 5. Check if $rawResText starts with or contains any heading line (# Title)
               (
                 if ($rawResText != "" and ($rawResText | test("^#+\\s+"; "m"))) then
                   ($rawResText | capture("^#+\\s+(?<customTitle>[^\n]+)") | .customTitle | gsub("^\\s+|\\s+$"; ""))
@@ -69,10 +71,10 @@ jobs:
                 end
               ) as $displayTitle |
 
-              # 6. Extract expandable body text (strips out the custom title heading line if present)
+              # 6. Extract body content by removing only the first heading line if present
               (
                 if ($rawResText != "" and ($rawResText | test("^#+\\s+"; "m"))) then
-                  ($rawResText | sub("^#+\\s+[^\n]+\\n?"; "") | gsub("^\\s+|\\s+$"; ""))
+                  ($rawResText | sub("^#+\\s+[^\n]+\n?"; "") | gsub("^\\s+|\\s+$"; ""))
                 else
                   $rawResText
                 end
