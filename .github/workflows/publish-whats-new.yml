@@ -113,5 +113,3 @@ jobs:
           commit_message: "sync: update whats-new data ledger"
           branch: main
           file_pattern: 'data.json'
-
-```
