@@ -35,10 +35,20 @@ jobs:
               . as $item |
               ($item.labels | map(.name)) as $labels |
 
-              # 1. Combine issue body and all comments
-              ([$item.body // ""] + (($item.comments // []) | map(.body // ""))) as $allTexts |
+              # 1. Combine issue body, title, and comments into a searchable text block
+              ([$item.title // "", $item.body // ""] + (($item.comments // []) | map(.body // ""))) as $allTexts |
+              ($allTexts | join("\n\n")) as $combinedText |
 
-              # 2. Extract Resolution Details section
+              # 2. Extract module name from square brackets [ModuleName] anywhere in title or description
+              (
+                if $combinedText | test("\\[[^\\]]+\\]") then
+                  ($combinedText | capture("\\[(?<mod>[^\\]]+)\\]") | .mod | gsub("^\\s+|\\s+$"; ""))
+                else
+                  null
+                end
+              ) as $moduleTag |
+
+              # 3. Extract Resolution Details section
               (
                 $allTexts | map(
                   select(test("#+\\s*Resolution Details"; "i")) |
@@ -48,13 +58,10 @@ jobs:
                 ) | first // ""
               ) as $rawResText |
 
-              # 3. Extract module prefix from bracket e.g. "[Applicant Portal]"
-              ($item.title | capture("\\[(?<mod>[^\\]]+)\\]") | .mod) // null as $moduleTag |
-
-              # 4. Clean issue title by removing the [Module] prefix
+              # 4. Clean base issue title by removing [Bracketed] text
               ($item.title | gsub("\\[[^\\]]*\\]"; "") | gsub("^\\s+|\\s+$"; "")) as $cleanTitle |
 
-              # 5. Check if Resolution Details contains a custom H3 title override (### Some Title)
+              # 5. Determine display title: Check if Resolution Details has a "### Title" line override
               (
                 if $rawResText | test("^###\\s+"; "m") then
                   ($rawResText | capture("^###\\s+(?<customTitle>[^\n]+)") | .customTitle | gsub("^\\s+|\\s+$"; ""))
@@ -63,7 +70,7 @@ jobs:
                 end
               ) as $displayTitle |
 
-              # 6. Extract the resolution details body (everything after custom H3 title if present)
+              # 6. Extract expandable body text (strip the custom ### title line if present)
               (
                 if $rawResText | test("^###\\s+"; "m") then
                   ($rawResText | sub("^###\\s+[^\n]+\\n?"; "") | gsub("^\\s+|\\s+$"; ""))
@@ -72,12 +79,12 @@ jobs:
                 end
               ) as $resBody |
 
-              # 7. Extract Category labels (Category: Feature, Category: Enhancement, Category: Bug fix, Category: UX/UI)
+              # 7. Extract Category labels
               (
                 [$item.labels[].name | select(startswith("Category:")) | split(":")[1] | gsub("^\\s+|\\s+$"; "")]
               ) as $cats |
 
-              # 8. Filter: Must contain both "in production" AND "what'\''s new"
+              # 8. Filter: Must have "in production" AND "what'\''s new"
               select(
                 ($labels | index("in production")) != null and
                 ($labels | index("what'\''s new")) != null
