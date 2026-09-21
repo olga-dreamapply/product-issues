@@ -44,8 +44,8 @@ jobs:
                   select(test("(?i)#+\\s*Resolution Details")) |
                   # Strip everything before Resolution Details header
                   sub("(?s).*?(?i)#+\\s*Resolution Details\\s*\n?"; "") |
-                  # Strip trailing sibling headers if another top-level section starts
-                  sub("(?s)\n#+ [^#].*"; "") |
+                  # Strip trailing sibling headers ONLY if a new ## header (level 1 or 2) starts
+                  sub("(?s)\n#{1,2}\\s+[^#].*"; "") |
                   gsub("^\\s+|\\s+$"; "")
                 ) | first // ""
               ) as $rawResText |
