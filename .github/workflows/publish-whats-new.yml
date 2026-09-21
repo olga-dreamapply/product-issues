@@ -35,20 +35,20 @@ jobs:
               . as $item |
               ($item.labels | map(.name)) as $labels |
 
-              # 1. Gather issue body and all comments strictly for Resolution Details content
+              # 1. Combine issue body and all comments into an array of texts
               ([$item.body // ""] + (($item.comments // []) | map(.body // ""))) as $bodyAndComments |
 
-              # 2. Extract Resolution Details section text
+              # 2. Extract content under Resolution Details (case-insensitive & any heading level #)
               (
                 $bodyAndComments | map(
-                  select(test("#+\\s*Resolution Details"; "i")) |
-                  sub("(?s).*?#+\\s*Resolution Details\\s*"; "") |
+                  select(test("(?i)#+\\s*Resolution Details")) |
+                  sub("(?s).*?(?i)#+\\s*Resolution Details\\s*"; "") |
                   sub("(?s)\\s*#+.*"; "") |
                   gsub("^\\s+|\\s+$"; "")
                 ) | first // ""
               ) as $rawResText |
 
-              # 3. Extract [Module] STRICTLY from $item.title (Prevents matching ![Image Alt](url) in details)
+              # 3. Extract [Module] strictly from $item.title
               (
                 if ($item.title | test("^\\[[^\\]]+\\]")) then
                   ($item.title | capture("^\\[(?<mod>[^\\]]+)\\]") | .mod | gsub("^\\s+|\\s+$"; ""))
@@ -57,22 +57,22 @@ jobs:
                 end
               ) as $moduleTag |
 
-              # 4. Clean base issue title by stripping leading [Module] tag
+              # 4. Clean base issue title by removing leading [Module] tag
               ($item.title | gsub("^\\[[^\\]]*\\]"; "") | gsub("^\\s+|\\s+$"; "")) as $cleanTitle |
 
-              # 5. Determine display title: Check if Resolution Details has an "### Title" line override
+              # 5. Check if Resolution Details has ANY nested heading (#, ##, ###, etc.) for Title Override
               (
-                if ($rawResText != "" and ($rawResText | test("^###\\s+"; "m"))) then
-                  ($rawResText | capture("^###\\s+(?<customTitle>[^\n]+)") | .customTitle | gsub("^\\s+|\\s+$"; ""))
+                if ($rawResText != "" and ($rawResText | test("^#+\\s+"; "m"))) then
+                  ($rawResText | capture("^#+\\s+(?<customTitle>[^\n]+)") | .customTitle | gsub("^\\s+|\\s+$"; ""))
                 else
                   $cleanTitle
                 end
               ) as $displayTitle |
 
-              # 6. Extract expandable body text (strips the custom ### title line if present)
+              # 6. Extract expandable body text (strips out the custom title heading line if present)
               (
-                if ($rawResText != "" and ($rawResText | test("^###\\s+"; "m"))) then
-                  ($rawResText | sub("^###\\s+[^\n]+\\n?"; "") | gsub("^\\s+|\\s+$"; ""))
+                if ($rawResText != "" and ($rawResText | test("^#+\\s+"; "m"))) then
+                  ($rawResText | sub("^#+\\s+[^\n]+\\n?"; "") | gsub("^\\s+|\\s+$"; ""))
                 else
                   $rawResText
                 end
