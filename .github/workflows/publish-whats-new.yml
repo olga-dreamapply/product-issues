@@ -35,22 +35,12 @@ jobs:
               . as $item |
               ($item.labels | map(.name)) as $labels |
 
-              # 1. Combine issue body, title, and comments into a searchable text block
-              ([$item.title // "", $item.body // ""] + (($item.comments // []) | map(.body // ""))) as $allTexts |
-              ($allTexts | join("\n\n")) as $combinedText |
+              # 1. Gather issue body and all comments
+              ([$item.body // ""] + (($item.comments // []) | map(.body // ""))) as $bodyAndComments |
 
-              # 2. Extract module name from square brackets [ModuleName] anywhere in title or description
+              # 2. Extract Resolution Details section
               (
-                if $combinedText | test("\\[[^\\]]+\\]") then
-                  ($combinedText | capture("\\[(?<mod>[^\\]]+)\\]") | .mod | gsub("^\\s+|\\s+$"; ""))
-                else
-                  null
-                end
-              ) as $moduleTag |
-
-              # 3. Extract Resolution Details section
-              (
-                $allTexts | map(
+                $bodyAndComments | map(
                   select(test("#+\\s*Resolution Details"; "i")) |
                   sub("(?s).*?#+\\s*Resolution Details\\s*"; "") |
                   sub("(?s)\\s*#+.*"; "") |
@@ -58,12 +48,21 @@ jobs:
                 ) | first // ""
               ) as $rawResText |
 
-              # 4. Clean base issue title by removing [Bracketed] text
-              ($item.title | gsub("\\[[^\\]]*\\]"; "") | gsub("^\\s+|\\s+$"; "")) as $cleanTitle |
-
-              # 5. Determine display title: Check if Resolution Details has a "### Title" line override
+              # 3. Extract [Module] from the Title ONLY (avoiding markdown links like [text](url))
               (
-                if $rawResText | test("^###\\s+"; "m") then
+                if ($item.title | test("^\\[[^\\]]+\\]")) then
+                  ($item.title | capture("^\\[(?<mod>[^\\]]+)\\]") | .mod | gsub("^\\s+|\\s+$"; ""))
+                else
+                  null
+                end
+              ) as $moduleTag |
+
+              # 4. Remove [Module] from issue title for clean title fallback
+              ($item.title | gsub("^\\[[^\\]]*\\]"; "") | gsub("^\\s+|\\s+$"; "")) as $cleanTitle |
+
+              # 5. Check if Resolution Details has a "### Title" line override
+              (
+                if ($rawResText != "" and ($rawResText | test("^###\\s+"; "m"))) then
                   ($rawResText | capture("^###\\s+(?<customTitle>[^\n]+)") | .customTitle | gsub("^\\s+|\\s+$"; ""))
                 else
                   $cleanTitle
@@ -72,7 +71,7 @@ jobs:
 
               # 6. Extract expandable body text (strip the custom ### title line if present)
               (
-                if $rawResText | test("^###\\s+"; "m") then
+                if ($rawResText != "" and ($rawResText | test("^###\\s+"; "m"))) then
                   ($rawResText | sub("^###\\s+[^\n]+\\n?"; "") | gsub("^\\s+|\\s+$"; ""))
                 else
                   $rawResText
@@ -84,7 +83,7 @@ jobs:
                 [$item.labels[].name | select(startswith("Category:")) | split(":")[1] | gsub("^\\s+|\\s+$"; "")]
               ) as $cats |
 
-              # 8. Filter: Must have "in production" AND "what'\''s new"
+              # 8. Filter: Must contain BOTH "in production" AND "what'\''s new"
               select(
                 ($labels | index("in production")) != null and
                 ($labels | index("what'\''s new")) != null
