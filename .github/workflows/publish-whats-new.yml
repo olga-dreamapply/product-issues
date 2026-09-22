@@ -2,13 +2,25 @@ name: Sync What's New Feed
 
 on:
   issues:
-    types: [edited, closed, reopened, labeled, unlabeled]
+    types: [closed, reopened, labeled, unlabeled]
   issue_comment:
     types: [created, edited, deleted]
+
+# Prevents concurrent runs from clashing during git push
+concurrency:
+  group: sync-whats-new-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   sync-whats-new:
     runs-on: ubuntu-latest
+
+    # GUARD CLAUSE: Only run if the issue is closed OR if it was just reopened (needs removal)
+    # AND ensure comment triggers only run on closed issues with the target label
+    if: >-
+      github.event.issue.state == 'closed' ||
+      github.event.action == 'reopened' ||
+      contains(github.event.issue.labels.*.name, 'what''s new')
 
     permissions:
       contents: read
