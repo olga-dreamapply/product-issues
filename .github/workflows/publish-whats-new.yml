@@ -37,7 +37,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
-          # Fetch all issues (closed and open) with full comment payload
+          # Fetch all issues with complete fields
           raw_issues=$(gh issue list --repo "$REPO" --state all --limit 1000 --json number,state,title,labels,closedAt,updatedAt,body,comments)
 
           echo "$raw_issues" | jq '
@@ -45,16 +45,27 @@ jobs:
               . as $item |
               ($item.labels | map(.name)) as $labels |
 
-              # 1. Combine issue body and all comments into one array
-              ([$item.body // ""] + (($item.comments // []) | map(.body // ""))) as $bodyAndComments |
-
-              # 2. Extract content under Resolution Details (case-insensitive)
+              # 1. Normalize line endings (CRLF -> LF) and collect all text blocks (body + comments)
               (
-                $bodyAndComments | map(
-                  select(test("(?i)#+\\s*Resolution Details")) |
-                  # Strip header
-                  sub("(?s).*?(?i)#+\\s*Resolution Details\\s*\n?"; "") |
-                  # Stop at next top-level header
+                [
+                  ($item.body // "" | gsub("\r\n"; "\n"))
+                ] + 
+                (
+                  if ($item.comments != null and ($item.comments | length > 0)) then
+                    [$item.comments[].body // "" | gsub("\r\n"; "\n")]
+                  else
+                    []
+                  end
+                )
+              ) as $textBlocks |
+
+              # 2. Extract content under "Resolution Details" (handles optional colon, extra spaces)
+              (
+                $textBlocks | map(
+                  select(test("(?i)#+\\s*Resolution\\s+Details")) |
+                  # Strip everything up to and including the "Resolution Details" header line
+                  sub("(?s).*?(?i)#+\\s*Resolution\\s+Details:?\\s*\n?"; "") |
+                  # Strip trailing level-1 or level-2 headers if another section starts
                   sub("(?s)\n#{1,2}\\s+[^#].*"; "") |
                   gsub("^\\s+|\\s+$"; "")
                 ) | first // ""
@@ -69,10 +80,10 @@ jobs:
                 end
               ) as $moduleTag |
 
-              # 4. Clean title
+              # 4. Clean base title by removing [Module]
               ($item.title | gsub("^\\[[^\\]]*\\]"; "") | gsub("^\\s+|\\s+$"; "")) as $cleanTitle |
 
-              # 5. Extract custom title or fallback to clean title
+              # 5. Extract custom display title if rawResText starts with a heading line
               (
                 if ($rawResText != "" and ($rawResText | test("^#+\\s+"; "m"))) then
                   ($rawResText | capture("^#+\\s+(?<customTitle>[^\n]+)") | .customTitle | gsub("^\\s+|\\s+$"; ""))
@@ -81,7 +92,7 @@ jobs:
                 end
               ) as $displayTitle |
 
-              # 6. Extract body content without custom title header line
+              # 6. Extract body content (strips the custom title heading line if present)
               (
                 if ($rawResText != "" and ($rawResText | test("^#+\\s+"; "m"))) then
                   ($rawResText | sub("^#+\\s+[^\n]+\n?"; "") | gsub("^\\s+|\\s+$"; ""))
@@ -95,7 +106,7 @@ jobs:
                 [$item.labels[].name | select(startswith("Category:")) | split(":")[1] | gsub("^\\s+|\\s+$"; "")]
               ) as $cats |
 
-              # Label checks
+              # 8. Check qualification conditions
               (($labels | index("what'\''s new")) != null) as $hasWhatsNew |
               (($labels | index("in production")) != null) as $hasInProduction |
               (($labels | index("Status: Roadmap")) != null) as $hasRoadmap |
