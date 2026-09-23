@@ -14,10 +14,15 @@ jobs:
   sync-whats-new:
     runs-on: ubuntu-latest
 
+    # GUARD CLAUSE: Only run if the issue has or had relevant labels, or was reopened
     if: >-
-      github.event.issue.state == 'closed' ||
       github.event.action == 'reopened' ||
-      contains(github.event.issue.labels.*.name, 'what''s new')
+      contains(github.event.issue.labels.*.name, 'what''s new') ||
+      contains(github.event.issue.labels.*.name, 'in production') ||
+      contains(github.event.issue.labels.*.name, 'Status: Roadmap') ||
+      github.event.label.name == 'what''s new' ||
+      github.event.label.name == 'in production' ||
+      github.event.label.name == 'Status: Roadmap'
 
     permissions:
       contents: read
@@ -37,15 +42,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
-          # Fetch all issues with complete fields
-          raw_issues=$(gh issue list --repo "$REPO" --state all --limit 1000 --json number,state,title,labels,closedAt,updatedAt,body,comments)
+          # OPTIMIZATION: Fetch ONLY issues labeled "what's new" rather than all 1000 issues
+          raw_issues=$(gh issue list --repo "$REPO" --label "what's new" --state all --limit 500 --json number,state,title,labels,closedAt,updatedAt,body,comments)
 
           echo "$raw_issues" | jq '
             map(
               . as $item |
               ($item.labels | map(.name)) as $labels |
 
-              # 1. Normalize line endings (CRLF -> LF) and collect all text blocks (body + comments)
+              # 1. Normalize line endings (CRLF -> LF) and collect all text blocks
               (
                 [
                   ($item.body // "" | gsub("\r\n"; "\n"))
@@ -59,13 +64,11 @@ jobs:
                 )
               ) as $textBlocks |
 
-              # 2. Extract content under "Resolution Details" (handles optional colon, extra spaces)
+              # 2. Extract content under "Resolution Details"
               (
                 $textBlocks | map(
                   select(test("(?i)#+\\s*Resolution\\s+Details")) |
-                  # Strip everything up to and including the "Resolution Details" header line
                   sub("(?s).*?(?i)#+\\s*Resolution\\s+Details:?\\s*\n?"; "") |
-                  # Strip trailing level-1 or level-2 headers if another section starts
                   sub("(?s)\n#{1,2}\\s+[^#].*"; "") |
                   gsub("^\\s+|\\s+$"; "")
                 ) | first // ""
@@ -80,7 +83,7 @@ jobs:
                 end
               ) as $moduleTag |
 
-              # 4. Clean base title by removing [Module]
+              # 4. Clean base title
               ($item.title | gsub("^\\[[^\\]]*\\]"; "") | gsub("^\\s+|\\s+$"; "")) as $cleanTitle |
 
               # 5. Extract custom display title if rawResText starts with a heading line
@@ -92,7 +95,7 @@ jobs:
                 end
               ) as $displayTitle |
 
-              # 6. Extract body content (strips the custom title heading line if present)
+              # 6. Extract body content
               (
                 if ($rawResText != "" and ($rawResText | test("^#+\\s+"; "m"))) then
                   ($rawResText | sub("^#+\\s+[^\n]+\n?"; "") | gsub("^\\s+|\\s+$"; ""))
@@ -106,7 +109,7 @@ jobs:
                 [$item.labels[].name | select(startswith("Category:")) | split(":")[1] | gsub("^\\s+|\\s+$"; "")]
               ) as $cats |
 
-              # 8. Check qualification conditions
+              # 8. Qualification checks
               (($labels | index("what'\''s new")) != null) as $hasWhatsNew |
               (($labels | index("in production")) != null) as $hasInProduction |
               (($labels | index("Status: Roadmap")) != null) as $hasRoadmap |
@@ -127,15 +130,6 @@ jobs:
               roadmap: map(select(.isRoadmap) | del(.isPublished, .isRoadmap))
             }
           ' > data.json
-
-      - name: Safely Pull Remote Changes
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          git stash --include-untracked
-          git pull --rebase origin main
-          git stash pop || true
 
       - name: Commit and Push Updated Data
         uses: stefanzweifel/git-auto-commit-action@v5
