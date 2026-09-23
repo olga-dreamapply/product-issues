@@ -1,43 +1,9 @@
-name: Sync What's New Feed
-
-on:
-  issues:
-    types: [closed, reopened, labeled, unlabeled]
-  issue_comment:
-    types: [created, edited, deleted]
-
-concurrency:
-  group: sync-whats-new-${{ github.ref }}
-  cancel-in-progress: true
-
-jobs:
-  sync-whats-new:
-    runs-on: ubuntu-latest
-
-    if: >-
-      github.event.issue.state == 'closed' ||
-      github.event.action == 'reopened' ||
-      contains(github.event.issue.labels.*.name, 'what''s new')
-
-    permissions:
-      contents: read
-      issues: read
-
-    steps:
-      - name: Checkout Public Page Repo
-        uses: actions/checkout@v4
-        with:
-          repository: 'olga-dreamapply/whats-new-page'
-          token: ${{ secrets.PUBLIC_DOCS_PAT }}
-          ref: 'main'
-          fetch-depth: 0
-
-      - name: Fetch and Process Qualified Issues
+- name: Fetch and Process Qualified Issues
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
-          # Fetch both closed and open issues (open issues may be marked as Roadmap)
+          # Fetch all issues (closed and open) with full comment payload
           raw_issues=$(gh issue list --repo "$REPO" --state all --limit 1000 --json number,state,title,labels,closedAt,updatedAt,body,comments)
 
           echo "$raw_issues" | jq '
@@ -45,14 +11,16 @@ jobs:
               . as $item |
               ($item.labels | map(.name)) as $labels |
 
-              # 1. Combine issue body and all comments
+              # 1. Combine issue body and all comments into one array
               ([$item.body // ""] + (($item.comments // []) | map(.body // ""))) as $bodyAndComments |
 
               # 2. Extract content under Resolution Details (case-insensitive)
               (
                 $bodyAndComments | map(
                   select(test("(?i)#+\\s*Resolution Details")) |
+                  # Strip header
                   sub("(?s).*?(?i)#+\\s*Resolution Details\\s*\n?"; "") |
+                  # Stop at next top-level header
                   sub("(?s)\n#{1,2}\\s+[^#].*"; "") |
                   gsub("^\\s+|\\s+$"; "")
                 ) | first // ""
@@ -67,7 +35,7 @@ jobs:
                 end
               ) as $moduleTag |
 
-              # 4. Clean base issue title
+              # 4. Clean title
               ($item.title | gsub("^\\[[^\\]]*\\]"; "") | gsub("^\\s+|\\s+$"; "")) as $cleanTitle |
 
               # 5. Extract custom title or fallback to clean title
@@ -79,7 +47,7 @@ jobs:
                 end
               ) as $displayTitle |
 
-              # 6. Extract body content without first custom title line
+              # 6. Extract body content without custom title header line
               (
                 if ($rawResText != "" and ($rawResText | test("^#+\\s+"; "m"))) then
                   ($rawResText | sub("^#+\\s+[^\n]+\n?"; "") | gsub("^\\s+|\\s+$"; ""))
@@ -93,7 +61,7 @@ jobs:
                 [$item.labels[].name | select(startswith("Category:")) | split(":")[1] | gsub("^\\s+|\\s+$"; "")]
               ) as $cats |
 
-              # Check label conditions
+              # Label checks
               (($labels | index("what'\''s new")) != null) as $hasWhatsNew |
               (($labels | index("in production")) != null) as $hasInProduction |
               (($labels | index("Status: Roadmap")) != null) as $hasRoadmap |
@@ -114,19 +82,3 @@ jobs:
               roadmap: map(select(.isRoadmap) | del(.isPublished, .isRoadmap))
             }
           ' > data.json
-
-      - name: Safely Pull Remote Changes
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          git stash --include-untracked
-          git pull --rebase origin main
-          git stash pop || true
-
-      - name: Commit and Push Updated Data
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "sync: update whats-new data ledger"
-          branch: main
-          file_pattern: 'data.json'
