@@ -6,7 +6,6 @@ on:
   issue_comment:
     types: [created, edited, deleted]
 
-# Prevents concurrent runs from clashing during git push
 concurrency:
   group: sync-whats-new-${{ github.ref }}
   cancel-in-progress: true
@@ -15,8 +14,6 @@ jobs:
   sync-whats-new:
     runs-on: ubuntu-latest
 
-    # GUARD CLAUSE: Only run if the issue is closed OR if it was just reopened (needs removal)
-    # AND ensure comment triggers only run on closed issues with the target label
     if: >-
       github.event.issue.state == 'closed' ||
       github.event.action == 'reopened' ||
@@ -40,29 +37,28 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
-          raw_issues=$(gh issue list --repo "$REPO" --state closed --limit 1000 --json number,title,labels,closedAt,body,comments)
+          # Fetch both closed and open issues (open issues may be marked as Roadmap)
+          raw_issues=$(gh issue list --repo "$REPO" --state all --limit 1000 --json number,state,title,labels,closedAt,updatedAt,body,comments)
 
           echo "$raw_issues" | jq '
             map(
               . as $item |
               ($item.labels | map(.name)) as $labels |
 
-              # 1. Combine issue body and all comments into an array
+              # 1. Combine issue body and all comments
               ([$item.body // ""] + (($item.comments // []) | map(.body // ""))) as $bodyAndComments |
 
               # 2. Extract content under Resolution Details (case-insensitive)
               (
                 $bodyAndComments | map(
                   select(test("(?i)#+\\s*Resolution Details")) |
-                  # Strip everything before Resolution Details header
                   sub("(?s).*?(?i)#+\\s*Resolution Details\\s*\n?"; "") |
-                  # Strip trailing sibling headers ONLY if a new ## header (level 1 or 2) starts
                   sub("(?s)\n#{1,2}\\s+[^#].*"; "") |
                   gsub("^\\s+|\\s+$"; "")
                 ) | first // ""
               ) as $rawResText |
 
-              # 3. Extract [Module] strictly from $item.title
+              # 3. Extract [Module] tag from title
               (
                 if ($item.title | test("^\\[[^\\]]+\\]")) then
                   ($item.title | capture("^\\[(?<mod>[^\\]]+)\\]") | .mod | gsub("^\\s+|\\s+$"; ""))
@@ -71,10 +67,10 @@ jobs:
                 end
               ) as $moduleTag |
 
-              # 4. Clean base issue title by removing leading [Module] tag
+              # 4. Clean base issue title
               ($item.title | gsub("^\\[[^\\]]*\\]"; "") | gsub("^\\s+|\\s+$"; "")) as $cleanTitle |
 
-              # 5. Check if $rawResText starts with or contains any heading line (# Title)
+              # 5. Extract custom title or fallback to clean title
               (
                 if ($rawResText != "" and ($rawResText | test("^#+\\s+"; "m"))) then
                   ($rawResText | capture("^#+\\s+(?<customTitle>[^\n]+)") | .customTitle | gsub("^\\s+|\\s+$"; ""))
@@ -83,7 +79,7 @@ jobs:
                 end
               ) as $displayTitle |
 
-              # 6. Extract body content by removing only the first heading line if present
+              # 6. Extract body content without first custom title line
               (
                 if ($rawResText != "" and ($rawResText | test("^#+\\s+"; "m"))) then
                   ($rawResText | sub("^#+\\s+[^\n]+\n?"; "") | gsub("^\\s+|\\s+$"; ""))
@@ -97,19 +93,26 @@ jobs:
                 [$item.labels[].name | select(startswith("Category:")) | split(":")[1] | gsub("^\\s+|\\s+$"; "")]
               ) as $cats |
 
-              # 8. Filter: Must contain BOTH "in production" AND "what'\''s new"
-              select(
-                ($labels | index("in production")) != null and
-                ($labels | index("what'\''s new")) != null
-              ) | {
+              # Check label conditions
+              (($labels | index("what'\''s new")) != null) as $hasWhatsNew |
+              (($labels | index("in production")) != null) as $hasInProduction |
+              (($labels | index("Status: Roadmap")) != null) as $hasRoadmap |
+
+              {
                 id: .number,
                 title: $displayTitle,
                 module: $moduleTag,
-                closedAt: .closedAt,
+                closedAt: (if $item.closedAt != null then $item.closedAt else $item.updatedAt end),
+                inProductionAt: (if $item.closedAt != null then $item.closedAt else $item.updatedAt end),
                 categories: (if ($cats | length) > 0 then $cats else ["General"] end),
-                resolutionText: $resBody
+                resolutionText: $resBody,
+                isPublished: ($hasWhatsNew and $hasInProduction and $item.state == "CLOSED"),
+                isRoadmap: ($hasWhatsNew and $hasRoadmap)
               }
-            )
+            ) | {
+              published: map(select(.isPublished) | del(.isPublished, .isRoadmap)),
+              roadmap: map(select(.isRoadmap) | del(.isPublished, .isRoadmap))
+            }
           ' > data.json
 
       - name: Safely Pull Remote Changes
