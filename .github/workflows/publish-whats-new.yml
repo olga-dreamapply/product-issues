@@ -1,4 +1,38 @@
-- name: Fetch and Process Qualified Issues
+name: Sync What's New Feed
+
+on:
+  issues:
+    types: [closed, reopened, labeled, unlabeled]
+  issue_comment:
+    types: [created, edited, deleted]
+
+concurrency:
+  group: sync-whats-new-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sync-whats-new:
+    runs-on: ubuntu-latest
+
+    if: >-
+      github.event.issue.state == 'closed' ||
+      github.event.action == 'reopened' ||
+      contains(github.event.issue.labels.*.name, 'what''s new')
+
+    permissions:
+      contents: read
+      issues: read
+
+    steps:
+      - name: Checkout Public Page Repo
+        uses: actions/checkout@v4
+        with:
+          repository: 'olga-dreamapply/whats-new-page'
+          token: ${{ secrets.PUBLIC_DOCS_PAT }}
+          ref: 'main'
+          fetch-depth: 0
+
+      - name: Fetch and Process Qualified Issues
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -82,3 +116,19 @@
               roadmap: map(select(.isRoadmap) | del(.isPublished, .isRoadmap))
             }
           ' > data.json
+
+      - name: Safely Pull Remote Changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git stash --include-untracked
+          git pull --rebase origin main
+          git stash pop || true
+
+      - name: Commit and Push Updated Data
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "sync: update whats-new data ledger"
+          branch: main
+          file_pattern: 'data.json'
