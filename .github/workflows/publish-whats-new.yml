@@ -14,7 +14,6 @@ jobs:
   sync-whats-new:
     runs-on: ubuntu-latest
 
-    # GUARD CLAUSE: Only run if the issue has or had relevant labels, or was reopened
     if: >-
       github.event.action == 'reopened' ||
       contains(github.event.issue.labels.*.name, 'what''s new') ||
@@ -42,29 +41,38 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
-          # OPTIMIZATION: Fetch ONLY issues labeled "what's new" rather than all 1000 issues
+          # 1. Fetch qualified candidate issues labeled "what's new"
           raw_issues=$(gh issue list --repo "$REPO" --label "what's new" --state all --limit 500 --json number,state,title,labels,closedAt,updatedAt,body,comments)
 
-          echo "$raw_issues" | jq '
+          # 2. Extract issue numbers that have the "in production" label
+          qualified_numbers=$(echo "$raw_issues" | jq -r '.[] | select(.labels[].name == "in production") | .number')
+
+          # 3. Build a map of issue number -> exact "in production" label timestamp
+          label_dates="{}"
+          if [ -n "$qualified_numbers" ]; then
+            for num in $qualified_numbers; do
+              # Fetch issue timeline events to find the exact "in production" labeled timestamp
+              in_prod_time=$(gh api "repos/$REPO/issues/$num/timeline" --paginate --jq 'map(select(.event == "labeled" and .label.name == "in production")) | last | .created_at // empty')
+              if [ -n "$in_prod_time" ]; then
+                label_dates=$(echo "$label_dates" | jq --arg n "$num" --arg t "$in_prod_time" '.[$n] = $t')
+              fi
+            done
+          fi
+
+          # 4. Process and structure data.json, using inProductionAt for sorting
+          echo "$raw_issues" | jq --argjson label_dates "$label_dates" '
             map(
               . as $item |
+              ($item.number | tostring) as $numStr |
               ($item.labels | map(.name)) as $labels |
 
-              # 1. Normalize line endings (CRLF -> LF) and collect all text blocks
+              # Normalize line endings and combine body + comments
               (
-                [
-                  ($item.body // "" | gsub("\r\n"; "\n"))
-                ] + 
-                (
-                  if ($item.comments != null and ($item.comments | length > 0)) then
-                    [$item.comments[].body // "" | gsub("\r\n"; "\n")]
-                  else
-                    []
-                  end
-                )
+                [($item.body // "" | gsub("\r\n"; "\n"))] + 
+                (if ($item.comments != null and ($item.comments | length > 0)) then [$item.comments[].body // "" | gsub("\r\n"; "\n")] else [] end)
               ) as $textBlocks |
 
-              # 2. Extract content under "Resolution Details"
+              # Extract Resolution Details text
               (
                 $textBlocks | map(
                   select(test("(?i)#+\\s*Resolution\\s+Details")) |
@@ -74,60 +82,44 @@ jobs:
                 ) | first // ""
               ) as $rawResText |
 
-              # 3. Extract [Module] tag from title
-              (
-                if ($item.title | test("^\\[[^\\]]+\\]")) then
-                  ($item.title | capture("^\\[(?<mod>[^\\]]+)\\]") | .mod | gsub("^\\s+|\\s+$"; ""))
-                else
-                  null
-                end
-              ) as $moduleTag |
+              # Extract [Module] prefix tag
+              (if ($item.title | test("^\\[[^\\]]+\\]")) then ($item.title | capture("^\\[(?<mod>[^\\]]+)\\]") | .mod | gsub("^\\s+|\\s+$"; "")) else null end) as $moduleTag |
 
-              # 4. Clean base title
+              # Clean base title
               ($item.title | gsub("^\\[[^\\]]*\\]"; "") | gsub("^\\s+|\\s+$"; "")) as $cleanTitle |
 
-              # 5. Extract custom display title if rawResText starts with a heading line
-              (
-                if ($rawResText != "" and ($rawResText | test("^#+\\s+"; "m"))) then
-                  ($rawResText | capture("^#+\\s+(?<customTitle>[^\n]+)") | .customTitle | gsub("^\\s+|\\s+$"; ""))
-                else
-                  $cleanTitle
-                end
-              ) as $displayTitle |
+              # Extract custom title if present
+              (if ($rawResText != "" and ($rawResText | test("^#+\\s+"; "m"))) then ($rawResText | capture("^#+\\s+(?<customTitle>[^\n]+)") | .customTitle | gsub("^\\s+|\\s+$"; "")) else $cleanTitle end) as $displayTitle |
 
-              # 6. Extract body content
-              (
-                if ($rawResText != "" and ($rawResText | test("^#+\\s+"; "m"))) then
-                  ($rawResText | sub("^#+\\s+[^\n]+\n?"; "") | gsub("^\\s+|\\s+$"; ""))
-                else
-                  $rawResText
-                end
-              ) as $resBody |
+              # Extract resolution body
+              (if ($rawResText != "" and ($rawResText | test("^#+\\s+"; "m"))) then ($rawResText | sub("^#+\\s+[^\n]+\n?"; "") | gsub("^\\s+|\\s+$"; "")) else $rawResText end) as $resBody |
 
-              # 7. Extract Category labels
-              (
-                [$item.labels[].name | select(startswith("Category:")) | split(":")[1] | gsub("^\\s+|\\s+$"; "")]
-              ) as $cats |
+              # Categories
+              ([$item.labels[].name | select(startswith("Category:")) | split(":")[1] | gsub("^\\s+|\\s+$"; "")]) as $cats |
 
-              # 8. Qualification checks
+              # Status flags
               (($labels | index("what'\''s new")) != null) as $hasWhatsNew |
               (($labels | index("in production")) != null) as $hasInProduction |
               (($labels | index("Status: Roadmap")) != null) as $hasRoadmap |
+
+              # Exact timestamp when "in production" label was set (fallback to closedAt/updatedAt if missing)
+              ($label_dates[$numStr] // $item.closedAt // $item.updatedAt) as $inProdDate |
 
               {
                 id: .number,
                 title: $displayTitle,
                 module: $moduleTag,
-                closedAt: (if $item.closedAt != null then $item.closedAt else $item.updatedAt end),
-                inProductionAt: (if $item.closedAt != null then $item.closedAt else $item.updatedAt end),
+                closedAt: ($item.closedAt // $item.updatedAt),
+                inProductionAt: $inProdDate,
                 categories: (if ($cats | length) > 0 then $cats else ["General"] end),
                 resolutionText: $resBody,
                 isPublished: ($hasWhatsNew and $hasInProduction and $item.state == "CLOSED"),
                 isRoadmap: ($hasWhatsNew and $hasRoadmap)
               }
             ) | {
-              published: map(select(.isPublished) | del(.isPublished, .isRoadmap)),
-              roadmap: map(select(.isRoadmap) | del(.isPublished, .isRoadmap))
+              # Sort published items in descending order based on inProductionAt timestamp
+              published: (map(select(.isPublished) | del(.isPublished, .isRoadmap)) | sort_by(.inProductionAt) | reverse),
+              roadmap: (map(select(.isRoadmap) | del(.isPublished, .isRoadmap)) | sort_by(.closedAt) | reverse)
             }
           ' > data.json
 
